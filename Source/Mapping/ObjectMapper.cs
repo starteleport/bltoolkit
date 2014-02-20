@@ -26,6 +26,18 @@ namespace BLToolkit.Mapping
 
 			var attr = mapMemberInfo.MemberAccessor.GetAttribute<MemberMapperAttribute>();
 
+			MemberExtension ext;
+
+			if (_extension != null && _extension.Members.TryGetValue(mapMemberInfo.MemberName,out ext))
+			{
+				AttributeExtensionCollection attrExt;
+
+				if (ext.Attributes.TryGetValue("MemberMapper", out attrExt))
+				{
+					attr = new MemberMapperAttribute((Type)attrExt[0].Values["MemberMapperType"]);
+				}
+			}
+
 			if (attr == null)
 			{
 				var attrs = TypeHelper.GetAttributes(mapMemberInfo.Type, typeof(MemberMapperAttribute));
@@ -104,7 +116,8 @@ namespace BLToolkit.Mapping
 			get { return _inheritanceMapping; }
 		}
 
-		private TypeExtension _extension;
+		[CLSCompliant(false)]
+		protected TypeExtension _extension;
 		public  TypeExtension  Extension
 		{
 			get { return _extension;  }
@@ -209,7 +222,8 @@ namespace BLToolkit.Mapping
 			return GetOrdinal(name);
 		}
 
-		private TypeAccessor _typeAccessor;
+		[CLSCompliant(false)]
+		protected TypeAccessor _typeAccessor;
 		public  TypeAccessor  TypeAccessor
 		{
 			get { return _typeAccessor; }
@@ -224,6 +238,18 @@ namespace BLToolkit.Mapping
 		#endregion
 
 		#region Init Mapper
+
+	    public void SetMappingTypeSequence(string sequenceName)
+	    {
+	        foreach (var memberMapper in _members)
+	        {
+	            if (memberMapper.MapMemberInfo.KeyGenerator != null)
+	            {
+                    memberMapper.MapMemberInfo.KeyGenerator = new SequenceKeyGenerator(sequenceName);
+	                break;
+	            }
+	        }
+	    }
 
 		public virtual void Init(MappingSchema mappingSchema, Type type)
 		{
@@ -248,13 +274,13 @@ namespace BLToolkit.Mapping
 				if (GetMapIgnore(ma))
 					continue;
 
-				var mapFieldAttr = ma.GetAttribute<MapFieldAttribute>();
+			    var mapFieldAttr = GetMapField(ma); // ma.GetAttribute<MapFieldAttribute>();
 
 				if (mapFieldAttr == null || (mapFieldAttr.OrigName == null && mapFieldAttr.Format == null))
 				{
 					var mi = new MapMemberInfo();
 
-					var dbTypeAttribute = ma.GetAttribute<DbTypeAttribute>();
+				    var dbTypeAttribute = GetDbType(ma); // ma.GetAttribute<DbTypeAttribute>();
 
 					if (dbTypeAttribute != null)
 					{
@@ -282,6 +308,7 @@ namespace BLToolkit.Mapping
 					mi.DefaultValue               = GetDefaultValue(ma);
 					mi.Nullable                   = GetNullable    (ma);
 					mi.NullValue                  = GetNullValue   (ma, mi.Nullable);
+				    mi.KeyGenerator               = GetKeyGenerator(ma);
 
 					Add(CreateMemberMapper(mi));
 				}
@@ -419,6 +446,7 @@ namespace BLToolkit.Mapping
 				// So we cache failed requests.
 				// If this optimization is a memory leak for you, just comment out next line.
 				//
+                // TODO : Should we add an option property?
 				if (_nameToComplexMapper.ContainsKey(name))
 					_nameToComplexMapper[name] = null;
 				else
@@ -453,10 +481,35 @@ namespace BLToolkit.Mapping
 			return MetadataProvider.GetNullable(MappingSchema, Extension, memberAccessor, out isSet);
 		}
 
+		protected virtual bool GetLazyInstance(MemberAccessor memberAccessor)
+		{
+			bool isSet;
+			return MetadataProvider.GetLazyInstance(MappingSchema, Extension, memberAccessor, out isSet);
+		}
+
 		protected virtual bool GetMapIgnore(MemberAccessor memberAccessor)
 		{
 			bool isSet;
 			return MetadataProvider.GetMapIgnore(Extension, memberAccessor, out isSet);
+		}
+
+		protected virtual MapFieldAttribute GetMapField(MemberAccessor memberAccessor)
+		{
+			bool isSet;
+			return MetadataProvider.GetMapField(Extension, memberAccessor, out isSet);
+		}
+
+		[CLSCompliant(false)]
+		protected virtual DbTypeAttribute GetDbType(MemberAccessor memberAccessor)
+		{
+			bool isSet;
+			return MetadataProvider.GetDbType(Extension, memberAccessor, out isSet);
+		}
+
+		protected virtual PrimaryKeyAttribute GetPrimaryKey(MemberAccessor memberAccessor)
+		{
+			bool isSet;
+			return MetadataProvider.GetPrimaryKey(Extension, memberAccessor, out isSet);
 		}
 
 		protected virtual bool GetSqlIgnore(MemberAccessor memberAccessor)
@@ -470,6 +523,25 @@ namespace BLToolkit.Mapping
 			bool isSet;
 			return MetadataProvider.GetFieldName(Extension, memberAccessor, out isSet);
 		}
+
+        protected virtual KeyGenerator GetKeyGenerator(MemberAccessor memberAccessor)
+        {
+            bool isSet;
+            var nonUpdatableAttribute = MetadataProvider.GetNonUpdatableAttribute(memberAccessor.Type, Extension, memberAccessor, out isSet);
+            if (isSet && nonUpdatableAttribute is IdentityAttribute)
+            {
+                bool isSeqSet;
+                string sequenceName = MetadataProvider.GetSequenceName(Extension, memberAccessor, out isSeqSet);
+                if (!isSeqSet)
+                    throw new NotImplementedException("Identity without sequence");
+
+                if (string.IsNullOrWhiteSpace(sequenceName))
+                    throw new Exception("SequenceName is empty");
+
+                return new SequenceKeyGenerator(sequenceName);                                   
+            }
+            return null;
+        }
 
 		protected virtual string GetFieldStorage(MemberAccessor memberAccessor)
 		{
